@@ -402,7 +402,9 @@ def _post_turn(pcm: bytes) -> dict:
     try:
         import thinksmart_voice
 
+        _log(f"turn pcm={len(pcm)}")
         data = thinksmart_voice.complete_turn(pcm)
+        _log(f"turn tx={(data.get('transcript') or '')[:80]!r} err={data.get('error','')}")
     except Exception as e:
         _speaker_on()
         return {"transcript": "", "reply": "server error", "error": str(e), "audio_b64": "", "duration": 0}
@@ -544,25 +546,14 @@ def _run_turn(auto: bool, followup: bool = False) -> dict:
         reply = data.get("reply") or ""
         heard = (data.get("transcript") or "").strip()
         if followup and not heard:
-            will_follow = _followup_depth < MAX_FOLLOWUPS
-            _set_state(
-                face="idle",
-                status="ready",
-                caption="",
-                hint=HINT_FOLLOWUP if will_follow else HINT_IDLE,
-                busy=False,
-            )
+            _set_state(face="idle", status="ready", caption="", hint=HINT_IDLE, busy=False)
             with _lock:
                 _mode = "idle"
                 _result = data
-            if will_follow:
-                _followup_depth += 1
-                _schedule_followup()
-            else:
-                _followup_depth = 0
-                _busy_off()
+            _followup_depth = 0
+            _busy_off()
             return data
-        will_follow = _followup_depth < MAX_FOLLOWUPS
+        will_follow = bool(heard and (data.get("audio_b64") or "") and _followup_depth < MAX_FOLLOWUPS)
         _set_state(
             face="idle",
             status=heard or "ready",

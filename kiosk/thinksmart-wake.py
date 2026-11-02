@@ -322,14 +322,19 @@ def main() -> None:
         _log(f"sidecar pw-record pid={proc.pid}")
         try:
             while proc.poll() is None:
+                if _busy():
+                    _log("mic yield to face")
+                    proc.send_signal(signal.SIGTERM)
+                    try:
+                        proc.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    while _busy():
+                        time.sleep(0.15)
+                    break
                 raw = proc.stdout.read(BYTES_100MS)
                 if not raw:
                     break
-                if _busy():
-                    rv_state = None
-                    gate.active = False
-                    gate.clip = bytearray()
-                    continue
                 s16 = audioop.lin2lin(raw, 4, 2)
                 mono = audioop.tomono(s16, 2, 0.5, 0.5)
                 pcm, rv_state = audioop.ratecv(mono, 2, 1, RATE_IN, RATE_OUT, rv_state)
