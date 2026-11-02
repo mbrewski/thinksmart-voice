@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Voice</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: #1a1a1a;
+      overflow: hidden;
+      font-family: system-ui, sans-serif;
+      touch-action: manipulation;
+      user-select: none;
+    }
+    #face-stage {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+      background: #1a1a1a;
+    }
+    #face {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+    #clock {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 28px;
+      text-align: center;
+      color: #eceae6;
+      pointer-events: none;
+      text-shadow: 0 1px 8px rgba(0,0,0,0.55);
+    }
+    #clock-time {
+      font-size: 52px;
+      font-weight: 500;
+      letter-spacing: 1px;
+      line-height: 1.05;
+    }
+    #clock-date {
+      margin-top: 6px;
+      font-size: 20px;
+      letter-spacing: 0.6px;
+      color: rgba(236,234,230,0.78);
+    }
+    #hint {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 36px;
+      text-align: center;
+      color: rgba(255,255,255,0.75);
+      font-size: 22px;
+      letter-spacing: 1px;
+      pointer-events: none;
+    }
+    #blank {
+      position: absolute;
+      inset: 0;
+      background: #000;
+      z-index: 30;
+      display: none;
+    }
+    #blank.on {
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <div id="face-stage" class="idle">
+    <img id="face" alt="" src="/faces/idle.jpg" />
+  </div>
+  <div id="clock">
+    <div id="clock-time"></div>
+    <div id="clock-date"></div>
+  </div>
+  <div id="hint">say hey grok, or press to talk</div>
+  <div id="blank"></div>
+  <audio id="player" playsinline webkit-playsinline></audio>
+  <script src="/thinksmart-kiosk.js?v=29"></script>
+</body>
+</html>

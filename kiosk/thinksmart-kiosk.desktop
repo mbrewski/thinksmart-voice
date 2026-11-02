@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=ThinkSmart Kiosk
+Comment=Grok voice kiosk
+Exec=/usr/bin/cage -s /usr/local/share/thinksmart-kiosk/thinksmart-face.py
+Type=Application
+DesktopNames=cage

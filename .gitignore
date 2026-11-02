@@ -1,0 +1,8 @@
+kiosk.env
+kiosk/kiosk.env
+kiosk/venv/
+**/__pycache__/
+*.pyc
+secrets/
+*.log
+.DS_Store

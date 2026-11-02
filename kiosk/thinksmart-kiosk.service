@@ -1,0 +1,14 @@
+[Unit]
+Description=ThinkSmart face kiosk (cage)
+After=graphical.target
+
+[Service]
+User=ubuntu
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=WAYLAND_DISPLAY=wayland-0
+ExecStart=/usr/bin/cage -s /usr/local/share/thinksmart-kiosk/thinksmart-face.py
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical.target

@@ -1,0 +1,22 @@
+[Unit]
+Description=ThinkSmart Hey Grok wake word
+After=sound.target network-online.target
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+SupplementaryGroups=audio
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=PULSE_SERVER=unix:/run/user/1000/pulse/native
+EnvironmentFile=-/etc/thinksmart-kiosk.env
+EnvironmentFile=-/usr/local/share/thinksmart-kiosk/kiosk.env
+WorkingDirectory=/usr/local/share/thinksmart-kiosk
+ExecStart=/usr/bin/python3 /usr/local/share/thinksmart-kiosk/thinksmart-wake.py
+Restart=always
+RestartSec=3
+MemoryMax=350M
+Nice=10
+OOMScoreAdjust=200
+
+[Install]
+WantedBy=multi-user.target

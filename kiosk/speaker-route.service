@@ -1,0 +1,12 @@
+[Unit]
+Description=ThinkSmart TAS speaker route (QUAT MI2S, no devmem)
+After=sound.target
+Wants=sound.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/speaker-route.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

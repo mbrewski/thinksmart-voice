@@ -1,0 +1,15 @@
+[Unit]
+Description=ThinkSmart volume keys
+After=sound.target
+
+[Service]
+User=ubuntu
+SupplementaryGroups=input audio
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=PULSE_SERVER=unix:/run/user/1000/pulse/native
+ExecStart=/usr/local/bin/thinksmart-volume.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
