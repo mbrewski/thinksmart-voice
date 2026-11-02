@@ -14,7 +14,6 @@ import wave
 from typing import Any
 
 import websockets
-from websockets.protocol import State
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -105,6 +104,16 @@ def pcm_to_wav(pcm: bytes, sample_rate: int) -> bytes:
     return buf.getvalue()
 
 
+def _ws_open(ws: Any) -> bool:
+    if ws is None:
+        return False
+    if hasattr(ws, "open"):
+        return bool(ws.open)
+    state = getattr(ws, "state", None)
+    name = getattr(state, "name", str(state or ""))
+    return name.endswith("OPEN")
+
+
 def _event_type(event: dict[str, Any]) -> str:
     return str(event.get("type") or "")
 
@@ -160,7 +169,7 @@ class GrokVoiceSession:
         return await self._collect()
 
     async def _ensure(self) -> None:
-        if self._ws is not None and getattr(self._ws, "state", None) is State.OPEN and self._ready:
+        if self._ws is not None and self._ready and _ws_open(self._ws):
             return
         await self._close()
         url = f"wss://api.x.ai/v1/realtime?model={MODEL}"
