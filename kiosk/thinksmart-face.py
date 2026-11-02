@@ -59,7 +59,6 @@ BUSY = "/tmp/kiosk-busy"
 MIC = "alsa_input.platform-c051000.sound-card.HiFi__Microphone__source"
 HINT_IDLE = "say hey grok, or press to talk"
 HINT_LISTEN = "Listening"
-HINT_FOLLOWUP = "I'm listening"
 HINT_MUTE = "mic muted"
 SW_MICROPHONE_INSERT = 4
 MUTE_DEV = "/dev/input/event0"
@@ -72,11 +71,7 @@ MIN_CMD = RATE_OUT * 2 * 8 // 10
 MAX_CMD = RATE_OUT * 2 * 10
 SILENCE_MS = 1100
 NO_SPEECH_MS = 5000
-FOLLOWUP_NO_SPEECH_MS = 15000
-MAX_FOLLOWUPS = 10
 SPEECH_RMS = 1400
-FOLLOWUP_SPEECH_RMS = 1800
-FOLLOWUP_SPEECH_FRAMES = 2
 try:
     BLANK_SEC = max(5, int(os.environ.get("SCREEN_IDLE_SEC", "60")))
 except ValueError:
@@ -86,7 +81,6 @@ _lock = threading.Lock()
 _mode = "idle"
 _stop = threading.Event()
 _result = {}
-_followup_depth = 0
 _mic_muted = False
 _last_activity = time.time()
 _state = {
@@ -491,24 +485,11 @@ def _record_stream(
     return bytes(buf)
 
 
-def _schedule_followup() -> None:
-    def go() -> None:
-        time.sleep(0.2)
-        with _lock:
-            if _mode != "idle":
-                return
-        _start_rec(True, followup=True)
-
-    threading.Thread(target=go, daemon=True).start()
-
-
-def _run_turn(auto: bool, followup: bool = False) -> dict:
-    global _mode, _result, _followup_depth
+def _run_turn(auto: bool) -> dict:
+    global _mode, _result
     _busy_on()
     _speaker_mute()
     try:
-        if followup:
-            time.sleep(0.25)
         _set_state(
             face="listen",
             status="listening",
@@ -516,27 +497,13 @@ def _run_turn(auto: bool, followup: bool = False) -> dict:
             hint=HINT_LISTEN,
             busy=False,
         )
-        pcm = _record_stream(
-            auto,
-            FOLLOWUP_NO_SPEECH_MS if followup else NO_SPEECH_MS,
-            speech_rms=FOLLOWUP_SPEECH_RMS if followup else SPEECH_RMS,
-            min_speech_frames=FOLLOWUP_SPEECH_FRAMES if followup else 1,
-        )
+        pcm = _record_stream(auto, NO_SPEECH_MS, speech_rms=SPEECH_RMS, min_speech_frames=1)
         _speaker_on()
         if _mic_muted:
             _set_state(face="sleep", status="muted", caption="", hint=HINT_MUTE, busy=False)
             with _lock:
                 _mode = "idle"
                 _result = {}
-            _followup_depth = 0
-            _busy_off()
-            return {}
-        if followup and len(pcm) < MIN_CMD:
-            _set_state(face="idle", status="ready", caption="", hint=HINT_IDLE, busy=False)
-            with _lock:
-                _mode = "idle"
-                _result = {}
-            _followup_depth = 0
             _busy_off()
             return {}
         _set_state(face="idle", status="thinking", hint="", busy=True)
@@ -545,34 +512,19 @@ def _run_turn(auto: bool, followup: bool = False) -> dict:
         data = _post_turn(pcm)
         reply = data.get("reply") or ""
         heard = (data.get("transcript") or "").strip()
-        if followup and not heard:
-            _set_state(face="idle", status="ready", caption="", hint=HINT_IDLE, busy=False)
-            with _lock:
-                _mode = "idle"
-                _result = data
-            _followup_depth = 0
-            _busy_off()
-            return data
-        will_follow = bool(heard and (data.get("audio_b64") or "") and _followup_depth < MAX_FOLLOWUPS)
         _set_state(
             face="idle",
             status=heard or "ready",
             caption=reply,
-            hint=HINT_FOLLOWUP if will_follow else HINT_IDLE,
+            hint=HINT_IDLE,
             busy=False,
         )
         with _lock:
             _mode = "idle"
             _result = data
-        if will_follow:
-            _followup_depth += 1
-            _schedule_followup()
-        else:
-            _followup_depth = 0
-            _busy_off()
+        _busy_off()
         return data
     except Exception:
-        _followup_depth = 0
         with _lock:
             _mode = "idle"
             _result = {}
@@ -584,8 +536,8 @@ def _run_turn(auto: bool, followup: bool = False) -> dict:
         _poke()
 
 
-def _start_rec(auto: bool, followup: bool = False) -> bool:
-    global _mode, _followup_depth
+def _start_rec(auto: bool) -> bool:
+    global _mode
     _poke()
     if _mic_muted:
         return False
@@ -593,10 +545,8 @@ def _start_rec(auto: bool, followup: bool = False) -> bool:
         if _mode != "idle":
             return True
         _mode = "listen" if auto else "hold"
-        if not followup:
-            _followup_depth = 0
     _stop.clear()
-    threading.Thread(target=_run_turn, kwargs={"auto": auto, "followup": followup}, daemon=True).start()
+    threading.Thread(target=_run_turn, kwargs={"auto": auto}, daemon=True).start()
     return True
 
 
