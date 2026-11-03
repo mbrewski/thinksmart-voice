@@ -13,7 +13,10 @@ import signal
 try:
     import audioop
 except ImportError:
-    import audioop_lts as audioop  # type: ignore
+    try:
+        import audioop_lts as audioop  # type: ignore
+    except ImportError:
+        import audioop_compat as audioop  # type: ignore
 import http.client
 import subprocess
 import threading
@@ -58,7 +61,7 @@ if not (os.environ.get("XAI_API_KEY") or "").strip():
 
 CLOCK_TZ = os.environ.get("CLOCK_TZ", os.environ.get("TZ", "UTC"))
 PORT = 1680
-URL = f"http://127.0.0.1:{PORT}/thinksmart-kiosk.html?v=40"
+URL = f"http://127.0.0.1:{PORT}/thinksmart-kiosk.html?v=41"
 REC_WAV = "/tmp/kiosk-rec.wav"
 BUSY = "/tmp/kiosk-busy"
 MIC = "alsa_input.platform-c051000.sound-card.HiFi__Microphone__source"

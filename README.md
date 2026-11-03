@@ -33,7 +33,7 @@ Panel already flashed from thinksmart-flash:
 ./tools/deploy-kiosk.sh ubuntu@PANEL_IPV4
 ```
 
-Needs `python3-gi`, `python3-websockets`, cage, PipeWire (install-panel.sh).
+Needs `python3-gi`, `python3-websockets`, cage, PipeWire (install-panel.sh). The face is **SDDM autologin** (`thinksmart-kiosk.desktop`), not `thinksmart-kiosk.service` — leave that unit disabled.
 
 ## Credits
 

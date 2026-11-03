@@ -6,7 +6,10 @@ import io
 try:
     import audioop
 except ImportError:
-    import audioop_lts as audioop  # type: ignore
+    try:
+        import audioop_lts as audioop  # type: ignore
+    except ImportError:
+        import audioop_compat as audioop  # type: ignore
 import os
 import re
 import signal

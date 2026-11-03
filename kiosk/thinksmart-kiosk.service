@@ -1,5 +1,8 @@
+# Do not enable this unit. The face runs under SDDM autologin
+# (thinksmart-kiosk.desktop → cage). A second cage on graphical.target
+# fights the session and has no seat.
 [Unit]
-Description=ThinkSmart face kiosk (cage)
+Description=ThinkSmart face kiosk (cage) — unused; SDDM owns the session
 After=graphical.target
 
 [Service]

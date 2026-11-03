@@ -5,9 +5,10 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-VENV_SITE = HERE / "venv/lib/python3.12/site-packages"
-if VENV_SITE.is_dir() and str(VENV_SITE) not in sys.path:
-    sys.path.insert(0, str(VENV_SITE))
+for _site in sorted(HERE.glob("venv/lib/python3.*/site-packages"), reverse=True):
+    if _site.is_dir() and str(_site) not in sys.path:
+        sys.path.insert(0, str(_site))
+        break
 
 KWS_DIR = HERE / "kws/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01"
 KEYWORDS = KWS_DIR / "hey_grok.txt"

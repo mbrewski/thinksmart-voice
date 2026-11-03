@@ -23,6 +23,7 @@ apt-get install -y --no-install-recommends \
 install -d -m 755 "$DEST" "$DEST/faces" "$DEST/faces/blink" "$DEST/kws"
 install -m 755 "$SRC/thinksmart-face.py" "$DEST/thinksmart-face.py"
 install -m 644 "$SRC/thinksmart_voice.py" "$DEST/thinksmart_voice.py"
+install -m 644 "$SRC/audioop_compat.py" "$DEST/audioop_compat.py"
 install -m 644 "$SRC/instructions.md" "$DEST/instructions.md"
 install -m 644 "$SRC/thinksmart-kiosk.html" "$DEST/thinksmart-kiosk.html"
 install -m 644 "$SRC/thinksmart-kiosk.js" "$DEST/thinksmart-kiosk.js"

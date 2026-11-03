@@ -318,6 +318,8 @@ class GrokVoiceSession:
                 saw_tool = True
                 _log(f"tool evt {etype}")
             elif etype == "response.done":
+                st = event.get("response") if isinstance(event.get("response"), dict) else {}
+                _log(f"response.done status={st.get('status')} tools={saw_tool} pcm={len(audio_parts)}")
                 pcm = b"".join(audio_parts)
                 reply = " ".join("".join(reply_parts).split())
                 if saw_tool and not pcm and created:

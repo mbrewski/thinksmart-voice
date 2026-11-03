@@ -1,5 +1,4 @@
 (() => {
-  const STREAM = "";
   const faceEl = document.getElementById("face");
   const stageEl = document.getElementById("face-stage");
   const hintEl = document.getElementById("hint");
