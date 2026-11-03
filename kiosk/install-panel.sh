@@ -18,7 +18,7 @@ apt-get install -y --no-install-recommends \
   cage python3-gi python3-gi-cairo python3-venv python3-websockets \
   gir1.2-gtk-4.0 gir1.2-webkit-6.0 libwebkitgtk-6.0-4 \
   alsa-utils pipewire pipewire-pulse wireplumber \
-  libasound2-plugins
+  libasound2-plugins cron
 
 install -d -m 755 "$DEST" "$DEST/faces" "$DEST/faces/blink" "$DEST/kws"
 install -m 755 "$SRC/thinksmart-face.py" "$DEST/thinksmart-face.py"
@@ -28,6 +28,8 @@ install -m 644 "$SRC/thinksmart-kiosk.html" "$DEST/thinksmart-kiosk.html"
 install -m 644 "$SRC/thinksmart-kiosk.js" "$DEST/thinksmart-kiosk.js"
 install -m 644 "$SRC/thinksmart_wakeword.py" "$DEST/thinksmart_wakeword.py"
 install -m 755 "$SRC/thinksmart-wake.py" "$DEST/thinksmart-wake.py"
+install -m 755 "$SRC/thinksmart-watchdog.sh" "$DEST/thinksmart-watchdog.sh"
+install -m 644 "$SRC/thinksmart-kiosk.cron" /etc/cron.d/thinksmart-kiosk
 install -m 644 "$SRC/bloub-LICENSE.txt" "$DEST/bloub-LICENSE.txt"
 install -m 644 "$SRC/kiosk.env.example" "$DEST/kiosk.env.example"
 install -m 644 "$SRC/kws/hey_grok.txt" "$DEST/kws/hey_grok.txt"
@@ -78,8 +80,9 @@ ln -sfn /dev/null /etc/systemd/system/pmos-audio-route.service
 ln -sfn /dev/null /etc/systemd/system/i2c1-pinctrl-fix.service
 
 systemctl daemon-reload
-systemctl enable speaker-route.service thinksmart-volume.service thinksmart-wake.service
+systemctl enable speaker-route.service thinksmart-volume.service thinksmart-wake.service cron
 systemctl restart speaker-route.service thinksmart-volume.service thinksmart-wake.service || true
+systemctl restart cron || true
 
 if [[ -d /run/user/$UID_NUM ]]; then
   sudo -u "$USER_NAME" XDG_RUNTIME_DIR="/run/user/$UID_NUM" \

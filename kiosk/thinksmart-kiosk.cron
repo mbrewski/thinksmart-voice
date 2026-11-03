@@ -1,0 +1,2 @@
+# ThinkSmart: unstick wake if kiosk-busy or pw-record dies.
+* * * * * root /usr/local/share/thinksmart-kiosk/thinksmart-watchdog.sh
