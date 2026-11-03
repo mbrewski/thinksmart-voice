@@ -77,6 +77,11 @@ def _tools() -> list[dict[str, Any]]:
             "type": "mcp",
             "server_url": mcp_url,
             "server_label": os.environ.get("MCP_LABEL", "home-assistant").strip() or "home-assistant",
+            "server_description": (
+                "This home's Home Assistant. Call homeassistant__GetLiveContext "
+                "for which lights are on. Call intent__HassTurnOn, intent__HassTurnOff, "
+                "or light__HassLightSet to control lights."
+            ),
         }
         cid = (os.environ.get("CF_ACCESS_CLIENT_ID") or "").strip()
         csec = (os.environ.get("CF_ACCESS_CLIENT_SECRET") or "").strip()
@@ -242,8 +247,13 @@ class GrokVoiceSession:
                 conv = event.get("conversation") if isinstance(event.get("conversation"), dict) else {}
                 self.conversation_id = str(conv.get("id") or self.conversation_id)
             if etype == "session.updated":
+                sess = event.get("session") if isinstance(event.get("session"), dict) else {}
+                tools = sess.get("tools") if isinstance(sess.get("tools"), list) else []
+                kinds = [str(t.get("type") or t.get("server_label") or "?") for t in tools if isinstance(t, dict)]
+                _log(f"session.updated tools={kinds}")
                 self._ready = True
                 return
+            _log(f"session evt {etype}")
         raise RuntimeError("voice session.update timed out")
 
     async def _collect(self) -> dict[str, Any]:
@@ -304,8 +314,9 @@ class GrokVoiceSession:
                 done_text = event.get("transcript")
                 if done_text:
                     reply_parts = [str(done_text)]
-            elif "function_call" in etype or "mcp_call" in etype or etype.startswith("response.web_search"):
+            elif "function_call" in etype or "mcp" in etype or etype.startswith("response.web_search"):
                 saw_tool = True
+                _log(f"tool evt {etype}")
             elif etype == "response.done":
                 pcm = b"".join(audio_parts)
                 reply = " ".join("".join(reply_parts).split())
