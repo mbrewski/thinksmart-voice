@@ -196,7 +196,8 @@
   }
 
   async function startRec() {
-    if (screenBlank || busy || rec || faceMode === "sleep") return;
+    if (screenBlank || rec || faceMode === "sleep") return;
+    if (busy && faceMode !== "speak") return;
     rec = true;
     localHold = true;
     startedAt = Date.now();

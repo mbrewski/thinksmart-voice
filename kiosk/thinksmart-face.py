@@ -53,7 +53,7 @@ if not (os.environ.get("XAI_API_KEY") or "").strip():
 
 CLOCK_TZ = os.environ.get("CLOCK_TZ", os.environ.get("TZ", "UTC"))
 PORT = 1680
-URL = f"http://127.0.0.1:{PORT}/thinksmart-kiosk.html?v=38"
+URL = f"http://127.0.0.1:{PORT}/thinksmart-kiosk.html?v=39"
 REC_WAV = "/tmp/kiosk-rec.wav"
 BUSY = "/tmp/kiosk-busy"
 MIC = "alsa_input.platform-c051000.sound-card.HiFi__Microphone__source"
@@ -83,6 +83,9 @@ _stop = threading.Event()
 _result = {}
 _mic_muted = False
 _last_activity = time.time()
+_play_lock = threading.Lock()
+_play_proc: subprocess.Popen | None = None
+_play_vol_restore: float | None = None
 _state = {
     "face": "idle",
     "status": "ready",
@@ -326,29 +329,72 @@ def _to_s16_stereo_48k(raw: bytes) -> bytes:
     return buf.getvalue()
 
 
+def _stop_play() -> None:
+    global _play_proc, _play_vol_restore
+    with _play_lock:
+        proc = _play_proc
+        _play_proc = None
+        restore = _play_vol_restore
+        _play_vol_restore = None
+    if proc is not None and proc.poll() is None:
+        proc.send_signal(signal.SIGTERM)
+        try:
+            proc.wait(timeout=1.0)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=1.0)
+        _log("tts interrupted")
+    if restore is not None:
+        _wpctl("set-volume", "@DEFAULT_AUDIO_SINK@", f"{restore:.2f}")
+
+
 def _play_file(path: str, dur: float) -> None:
-    timeout = max(8, int(dur) + 6)
+    global _play_proc
     env = _env()
-    pw = subprocess.run(
+    proc = subprocess.Popen(
         ["pw-play", "--latency=120ms", path],
         env=env,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        timeout=timeout,
-        check=False,
     )
-    if pw.returncode == 0:
-        return
-    subprocess.run(
-        ["paplay", path],
-        env=env,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        timeout=timeout,
-        check=False,
-    )
+    with _play_lock:
+        _play_proc = proc
+
+    def _wait() -> None:
+        global _play_proc, _play_vol_restore
+        try:
+            proc.wait(timeout=max(8, int(dur) + 6))
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=1.0)
+        with _play_lock:
+            if _play_proc is proc:
+                _play_proc = None
+                restore = _play_vol_restore
+                _play_vol_restore = None
+            else:
+                restore = None
+        if restore is not None:
+            _wpctl("set-volume", "@DEFAULT_AUDIO_SINK@", f"{restore:.2f}")
+        with _lock:
+            finished = _mode == "speak" and proc.returncode == 0
+            if finished:
+                _mode = "idle"
+        if finished:
+            _set_state(face="idle", hint=HINT_IDLE, busy=False)
+        if proc.returncode not in (0, None, -signal.SIGTERM, -signal.SIGKILL):
+            subprocess.run(
+                ["paplay", path],
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=max(8, int(dur) + 6),
+                check=False,
+            )
+
+    threading.Thread(target=_wait, daemon=True).start()
 
 
 def _play_b64(b64: str) -> float:
@@ -372,16 +418,14 @@ def _play_b64(b64: str) -> float:
     except Exception as e:
         _log(f"tts resample fail {e}")
         play = path
+    global _play_vol_restore
     prev = _sink_vol()
     play_vol = min(prev, 1.0)
     _speaker_on()
     if play_vol + 0.001 < prev:
+        _play_vol_restore = prev
         _wpctl("set-volume", "@DEFAULT_AUDIO_SINK@", f"{play_vol:.2f}")
-    try:
-        _play_file(play, dur)
-    finally:
-        if play_vol + 0.001 < prev:
-            _wpctl("set-volume", "@DEFAULT_AUDIO_SINK@", f"{prev:.2f}")
+    _play_file(play, dur)
     return dur
 
 
@@ -407,11 +451,10 @@ def _post_turn(pcm: bytes) -> dict:
     if not heard or not audio:
         data["duration"] = 0
         return data
-    _set_state(face="speak", status="speaking", caption=data.get("reply") or "", hint="", busy=True)
+    _set_state(face="speak", status="speaking", caption=data.get("reply") or "", hint=HINT_IDLE, busy=False)
     dur = _play_b64(audio)
     data["duration"] = dur
     _speaker_on()
-    time.sleep(0.3)
     return data
 
 
@@ -512,15 +555,16 @@ def _run_turn(auto: bool) -> dict:
         data = _post_turn(pcm)
         reply = data.get("reply") or ""
         heard = (data.get("transcript") or "").strip()
+        speaking = bool(data.get("audio_b64"))
         _set_state(
-            face="idle",
-            status=heard or "ready",
+            face="speak" if speaking else "idle",
+            status="speaking" if speaking else (heard or "ready"),
             caption=reply,
             hint=HINT_IDLE,
             busy=False,
         )
         with _lock:
-            _mode = "idle"
+            _mode = "speak" if speaking else "idle"
             _result = data
         _busy_off()
         return data
@@ -539,10 +583,11 @@ def _run_turn(auto: bool) -> dict:
 def _start_rec(auto: bool) -> bool:
     global _mode
     _poke()
+    _stop_play()
     if _mic_muted:
         return False
     with _lock:
-        if _mode != "idle":
+        if _mode in ("listen", "hold", "busy"):
             return True
         _mode = "listen" if auto else "hold"
     _stop.clear()
