@@ -111,7 +111,19 @@ def _session_payload() -> dict[str, Any]:
             "audio": {
                 "input": {
                     "format": {"type": "audio/pcm", "rate": SAMPLE_IN},
-                    "transcription": {"language_hint": "en"},
+                    "transcription": {
+                        "language_hint": "en",
+                        "keyterms": [
+                            "Grand Drive",
+                            "Centennial",
+                            "Aurora",
+                            "E-470",
+                            "I-225",
+                            "Colfax",
+                            "home",
+                            "work",
+                        ],
+                    },
                 },
                 "output": {"format": {"type": "audio/pcm", "rate": SAMPLE_OUT}},
             },
