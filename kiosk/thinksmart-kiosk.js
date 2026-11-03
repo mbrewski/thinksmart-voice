@@ -60,7 +60,6 @@
   let busy = false;
   let screenBlank = false;
   let startedAt = 0;
-  let audioCtx = null;
   let localHold = false;
   let faceMode = "";
   let blinkTimer = 0;
@@ -104,8 +103,18 @@
     schedule();
   }
 
+  const FACE_POSE = {
+    listen: "wide",
+    speak: "notify",
+    error: "alert",
+    thinking: "thinking",
+    idle: "idle",
+    sleep: "sleep",
+  };
+
   function pushFace(name) {
-    fetch("/bot/face?name=" + encodeURIComponent(name)).catch(() => {});
+    const pose = FACE_POSE[name] || name;
+    fetch("/bot/face?name=" + encodeURIComponent(pose)).catch(() => {});
   }
 
   function startAnim(name) {
@@ -169,30 +178,6 @@
     } finally {
       polling = false;
     }
-  }
-
-  function playWavB64(b64) {
-    if (!b64) return;
-    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-    const blob = new Blob([bytes], { type: "audio/wav" });
-    player.src = URL.createObjectURL(blob);
-    player.volume = 1;
-    player.muted = false;
-    const p = player.play();
-    if (p && p.catch) p.catch(() => {});
-    try {
-      const AC = window.AudioContext || window.webkitAudioContext;
-      audioCtx = audioCtx || new AC();
-      if (!player._boost) {
-        const src = audioCtx.createMediaElementSource(player);
-        const gain = audioCtx.createGain();
-        gain.gain.value = 1.6;
-        src.connect(gain);
-        gain.connect(audioCtx.destination);
-        player._boost = gain;
-      }
-      if (audioCtx.state === "suspended") audioCtx.resume();
-    } catch {}
   }
 
   async function startRec() {
@@ -267,7 +252,7 @@
   tickClock();
   setInterval(tickClock, 1000);
   pollJpg();
-  setInterval(pollJpg, 120);
+  setInterval(pollJpg, 85);
   setInterval(async () => {
     if (rec) return;
     try {

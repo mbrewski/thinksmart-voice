@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """Face kiosk: hold-to-talk and Hey Grok; Grok Voice on-device."""
 import array
-import audioop
 import base64
 import fcntl
 import http.server
 import io
 import json
 import os
+import select
+import shutil
 import signal
+try:
+    import audioop
+except ImportError:
+    import audioop_lts as audioop  # type: ignore
 import http.client
 import subprocess
 import threading
@@ -53,7 +58,7 @@ if not (os.environ.get("XAI_API_KEY") or "").strip():
 
 CLOCK_TZ = os.environ.get("CLOCK_TZ", os.environ.get("TZ", "UTC"))
 PORT = 1680
-URL = f"http://127.0.0.1:{PORT}/thinksmart-kiosk.html?v=39"
+URL = f"http://127.0.0.1:{PORT}/thinksmart-kiosk.html?v=40"
 REC_WAV = "/tmp/kiosk-rec.wav"
 BUSY = "/tmp/kiosk-busy"
 MIC = "alsa_input.platform-c051000.sound-card.HiFi__Microphone__source"
@@ -89,6 +94,7 @@ _stop = threading.Event()
 _result = {}
 _followup_depth = 0
 _followup_skip = False
+_take_hold = False
 _mic_muted = False
 _last_activity = time.time()
 _play_lock = threading.Lock()
@@ -102,6 +108,16 @@ _state = {
     "busy": False,
     "tz": CLOCK_TZ,
     "blank": False,
+    "mode": "idle",
+}
+
+FACE_POSE = {
+    "listen": "wide",
+    "speak": "notify",
+    "error": "alert",
+    "thinking": "thinking",
+    "idle": "idle",
+    "sleep": "sleep",
 }
 
 
@@ -115,8 +131,11 @@ def _env():
 def _log(msg: str) -> None:
     line = time.strftime("%H:%M:%S ") + msg
     print(line, flush=True)
+    path = "/tmp/kiosk-wake.log"
     try:
-        with open("/tmp/kiosk-wake.log", "a", encoding="utf-8") as fh:
+        if os.path.exists(path) and os.path.getsize(path) > 1_500_000:
+            os.replace(path, path + ".1")
+        with open(path, "a", encoding="utf-8") as fh:
             fh.write(line + "\n")
     except OSError:
         pass
@@ -125,8 +144,9 @@ def _log(msg: str) -> None:
 def _push_face(name: str) -> None:
     def _go() -> None:
         try:
+            pose = FACE_POSE.get(name, name)
             subprocess.run(
-                ["curl", "-sS", "-m", "1", f"{FACE_STREAM}/face?name={name}"],
+                ["curl", "-sS", "-m", "1", f"{FACE_STREAM}/face?name={pose}"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 check=False,
@@ -167,6 +187,7 @@ def _set_state(**kwargs) -> None:
             face = _state.get("face") or "idle"
             if _state.get("status") == "thinking":
                 face = "thinking"
+        _state["mode"] = _mode
     _push_face(face)
 
 
@@ -202,6 +223,7 @@ def _poke() -> None:
         _state["blank"] = False
     if was:
         _log("screen on")
+        _panel_on()
 
 
 def _blank_watch() -> None:
@@ -228,6 +250,16 @@ def _busy_off() -> None:
         os.remove(BUSY)
     except FileNotFoundError:
         pass
+
+
+def _panel_on() -> None:
+    env = _env()
+    for cmd in (
+        ["kscreen-doctor", "--dpms", "on"],
+        ["brightnessctl", "set", "100%"],
+    ):
+        if shutil.which(cmd[0]):
+            subprocess.Popen(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def _unmute():
@@ -388,7 +420,7 @@ def _play_file(path: str, dur: float) -> None:
         if restore is not None:
             _wpctl("set-volume", "@DEFAULT_AUDIO_SINK@", f"{restore:.2f}")
         rc = proc.returncode
-        if rc not in (0, None, -signal.SIGTERM, -signal.SIGKILL):
+        if rc not in (0, None, -signal.SIGTERM, -signal.SIGKILL) and shutil.which("paplay"):
             subprocess.run(
                 ["paplay", path],
                 env=env,
@@ -511,8 +543,14 @@ def _record_stream(
     time.sleep(0.25)
     try:
         while proc.poll() is None:
-            if _stop.is_set() and not auto:
+            hold = (not auto) or _take_hold
+            if _stop.is_set() and hold:
                 break
+            ready, _, _ = select.select([proc.stdout], [], [], 0.2)
+            if not ready:
+                if time.time() - t0 > 25:
+                    break
+                continue
             raw = proc.stdout.read(BYTES_100MS)
             if not raw:
                 break
@@ -523,7 +561,7 @@ def _record_stream(
                 continue
             buf.extend(pcm)
             now = time.time()
-            if auto:
+            if auto and not _take_hold:
                 r = _rms(pcm)
                 thresh = max(speech_rms, near_rms, int(floor * 3.2))
                 if r < thresh:
@@ -646,7 +684,7 @@ def _run_turn(auto: bool, followup: bool = False) -> dict:
 
 
 def _start_rec(auto: bool, followup: bool = False) -> bool:
-    global _mode, _followup_depth
+    global _mode, _followup_depth, _take_hold
     _poke()
     if not followup:
         _stop_play()
@@ -655,8 +693,13 @@ def _start_rec(auto: bool, followup: bool = False) -> bool:
         return False
     _busy_on()
     with _lock:
+        if _mode == "listen" and not auto:
+            _take_hold = True
+            _mode = "hold"
+            return True
         if _mode in ("listen", "hold", "busy"):
             return True
+        _take_hold = False
         _mode = "listen" if auto else "hold"
         if followup:
             _followup_depth += 1
@@ -669,7 +712,7 @@ def _stop_and_turn() -> dict:
     with _lock:
         mode = _mode
         data = dict(_result)
-    if mode != "hold":
+    if mode not in ("hold", "listen"):
         return data or dict(_state)
     _stop.set()
     for _ in range(1000):

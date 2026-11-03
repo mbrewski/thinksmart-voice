@@ -21,6 +21,13 @@ cset() {
   fi
 }
 
+for _ in 1 2 3 4 5 6; do
+  if amixer -c "$CARD" cget "name=QUAT_MI2S_RX Audio Mixer MultiMedia1" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 2
+done
+
 cset "QUAT_MI2S_RX Audio Mixer MultiMedia1" 1
 cset "PRI_MI2S_RX Audio Mixer MultiMedia1" 0
 cset "Headphone Jack Switch" on

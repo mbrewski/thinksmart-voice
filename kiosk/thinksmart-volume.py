@@ -8,6 +8,7 @@ on a second fd.
 import fcntl
 import os
 import re
+import shutil
 import select
 import struct
 import subprocess
@@ -75,7 +76,7 @@ def current_vol() -> float:
 
 
 def click() -> None:
-    if os.path.isfile(CLICK):
+    if os.path.isfile(CLICK) and shutil.which("paplay"):
         subprocess.Popen(
             ["paplay", CLICK],
             stdout=subprocess.DEVNULL,

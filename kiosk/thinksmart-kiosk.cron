@@ -1,2 +1,5 @@
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
 # ThinkSmart: unstick wake if kiosk-busy or pw-record dies.
 * * * * * root /usr/local/share/thinksmart-kiosk/thinksmart-watchdog.sh

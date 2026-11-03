@@ -2,8 +2,11 @@
 """Sidecar wake: energy gate + Grok STT, optional sherpa. Isolated from GTK."""
 from __future__ import annotations
 
-import audioop
 import io
+try:
+    import audioop
+except ImportError:
+    import audioop_lts as audioop  # type: ignore
 import os
 import re
 import signal
@@ -75,6 +78,8 @@ def _log(msg: str) -> None:
     line = time.strftime("%H:%M:%S ") + msg
     print(line, flush=True)
     try:
+        if os.path.exists(LOG) and os.path.getsize(LOG) > 1_500_000:
+            os.replace(LOG, LOG + ".1")
         with open(LOG, "a", encoding="utf-8") as fh:
             fh.write(line + "\n")
     except OSError:
@@ -221,7 +226,7 @@ class Gate:
             _log(
                 f"rms={rms} floor={int(self.floor)} speech={self.speech_n} "
                 f"active={self.active} tv_pause={paused}s"
-            )
+            )  # no transcript here; STT text is logged only on notify/skip
         thresh = max(THRESH_MIN, int(self.floor * FLOOR_MULT))
         if rms < thresh:
             self.floor = self.floor * 0.97 + rms * 0.03

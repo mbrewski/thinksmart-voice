@@ -18,7 +18,7 @@ apt-get install -y --no-install-recommends \
   cage python3-gi python3-gi-cairo python3-venv python3-websockets \
   gir1.2-gtk-4.0 gir1.2-webkit-6.0 libwebkitgtk-6.0-4 \
   alsa-utils pipewire pipewire-pulse wireplumber \
-  libasound2-plugins cron
+  libasound2-plugins pulseaudio-utils cron kmod
 
 install -d -m 755 "$DEST" "$DEST/faces" "$DEST/faces/blink" "$DEST/kws"
 install -m 755 "$SRC/thinksmart-face.py" "$DEST/thinksmart-face.py"
@@ -50,6 +50,7 @@ fi
 chown -R "$USER_NAME:$USER_NAME" "$DEST"
 
 install -m 755 "$SRC/speaker-route.sh" /usr/local/bin/speaker-route.sh
+install -m 755 "$SRC/mic-unmute.sh" /usr/local/bin/mic-unmute.sh
 install -m 755 "$SRC/thinksmart-volume.py" /usr/local/bin/thinksmart-volume.py
 install -m 644 "$SRC/speaker-route.service" /etc/systemd/system/speaker-route.service
 install -m 644 "$SRC/thinksmart-volume.service" /etc/systemd/system/thinksmart-volume.service
@@ -78,6 +79,16 @@ fi
 systemctl mask pmos-audio-route.service i2c1-pinctrl-fix.service idle-blanker.service 2>/dev/null || true
 ln -sfn /dev/null /etc/systemd/system/pmos-audio-route.service
 ln -sfn /dev/null /etc/systemd/system/i2c1-pinctrl-fix.service
+USER_HOME="$(getent passwd "$USER_NAME" | cut -d: -f6)"
+install -d -m 755 -o "$USER_NAME" -g "$USER_NAME" "$USER_HOME/.config/systemd/user" \
+  "$USER_HOME/.config/systemd/user/graphical-session.target.wants"
+ln -sfn /dev/null "$USER_HOME/.config/systemd/user/idle-blanker.service"
+rm -f "$USER_HOME/.config/systemd/user/graphical-session.target.wants/idle-blanker.service"
+chown -h "$USER_NAME:$USER_NAME" "$USER_HOME/.config/systemd/user/idle-blanker.service" 2>/dev/null || true
+if [[ -d /run/user/$UID_NUM ]]; then
+  sudo -u "$USER_NAME" XDG_RUNTIME_DIR="/run/user/$UID_NUM" \
+    systemctl --user mask idle-blanker.service 2>/dev/null || true
+fi
 
 systemctl daemon-reload
 systemctl enable speaker-route.service thinksmart-volume.service thinksmart-wake.service cron

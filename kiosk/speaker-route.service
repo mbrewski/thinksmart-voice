@@ -5,6 +5,7 @@ Wants=sound.target
 
 [Service]
 Type=oneshot
+ExecStartPre=-/sbin/modprobe snd_soc_tas5782m_dbg
 ExecStart=/usr/local/bin/speaker-route.sh
 RemainAfterExit=yes
 
