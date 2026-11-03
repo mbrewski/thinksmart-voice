@@ -50,10 +50,9 @@
     listen: "/faces/listen.jpg",
     speak: "/faces/speak.jpg",
     thinking: "/faces/idle.jpg",
-    error: "/faces/error.jpg",
-    sleep: "/faces/blink/idle.jpg",
+    error: "/faces/idle.jpg",
+    sleep: "/faces/idle.jpg",
   };
-  const blinks = { idle: "/faces/blink/idle.jpg" };
 
   let rec = false;
   let busy = false;
@@ -61,71 +60,20 @@
   let startedAt = 0;
   let localHold = false;
   let faceMode = "";
-  let blinkTimer = 0;
-  let streamOk = false;
-  let streamErrors = 0;
-  let prevUrl = "";
-  let polling = false;
   const preloaded = {};
 
   function preloadUrl(src) {
-    if (!src || preloaded[src] || streamOk) return;
+    if (!src || preloaded[src]) return;
     const im = new Image();
     im.src = src;
     preloaded[src] = im;
   }
 
-  function stopAnim() {
-    if (blinkTimer) {
-      clearTimeout(blinkTimer);
-      blinkTimer = 0;
-    }
-  }
-
-  function startIdleBlink(name) {
-    const openSrc = faces[name] || faces.idle;
-    const blinkSrc = blinks[name];
-    faceEl.src = openSrc;
-    if (!blinkSrc) return;
-    preloadUrl(blinkSrc);
-    const schedule = () => {
-      const wait = 3200 + Math.floor(Math.random() * 2800);
-      blinkTimer = setTimeout(() => {
-        if (faceMode !== name || streamOk) return;
-        faceEl.src = blinkSrc;
-        blinkTimer = setTimeout(() => {
-          if (faceMode === name && !streamOk) faceEl.src = openSrc;
-          schedule();
-        }, 140);
-      }, wait);
-    };
-    schedule();
-  }
-
-  const FACE_POSE = {
-    listen: "wide",
-    speak: "notify",
-    error: "alert",
-    thinking: "thinking",
-    idle: "idle",
-    sleep: "sleep",
-  };
-
-  function pushFace(name) {
-    const pose = FACE_POSE[name] || name;
-    fetch("/bot/face?name=" + encodeURIComponent(pose)).catch(() => {});
-  }
+  Object.values(faces).forEach(preloadUrl);
 
   function startAnim(name) {
-    stopAnim();
     if (stageEl) stageEl.className = name;
-    pushFace(name);
-    if (streamOk) return;
-    if (name === "sleep") {
-      faceEl.src = faces.sleep;
-      return;
-    }
-    startIdleBlink(name);
+    faceEl.src = faces[name] || faces.idle;
   }
 
   function setFace(name, status, caption, hint) {
@@ -151,32 +99,6 @@
     try {
       await fetch("/unblank", { method: "POST" });
     } catch {}
-  }
-
-  async function pollJpg() {
-    if (polling || screenBlank) return;
-    polling = true;
-    try {
-      const res = await fetch("/bot.jpg?r=" + Date.now(), { cache: "no-store" });
-      if (!res.ok) throw new Error("jpg");
-      const blob = await res.blob();
-      if (blob.size < 200) throw new Error("empty");
-      const url = URL.createObjectURL(blob);
-      faceEl.src = url;
-      if (prevUrl) URL.revokeObjectURL(prevUrl);
-      prevUrl = url;
-      if (!streamOk) stopAnim();
-      streamOk = true;
-      streamErrors = 0;
-    } catch {
-      streamErrors += 1;
-      if (streamErrors >= 3 && streamOk) {
-        streamOk = false;
-        startIdleBlink(faceMode || "idle");
-      }
-    } finally {
-      polling = false;
-    }
   }
 
   async function startRec() {
@@ -250,8 +172,6 @@
   setFace("idle", "ready", "", "say hey grok, or press to talk");
   tickClock();
   setInterval(tickClock, 1000);
-  pollJpg();
-  setInterval(pollJpg, 85);
   setInterval(async () => {
     if (rec) return;
     try {
