@@ -86,6 +86,16 @@ def _tools() -> list[dict[str, Any]]:
                 "CF-Access-Client-Secret": csec,
             }
         tools.append(mcp)
+    tomtom_key = (os.environ.get("TOMTOM_API_KEY") or "").strip()
+    if tomtom_key:
+        tools.append(
+            {
+                "type": "mcp",
+                "server_url": os.environ.get("TOMTOM_MCP_URL", "https://mcp.tomtom.com/maps").strip(),
+                "server_label": os.environ.get("TOMTOM_MCP_LABEL", "tomtom").strip() or "tomtom",
+                "headers": {"tomtom-api-key": tomtom_key},
+            }
+        )
     return tools
 
 
