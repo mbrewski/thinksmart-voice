@@ -72,9 +72,11 @@ MAX_CMD = RATE_OUT * 2 * 10
 SILENCE_MS = 1600
 NO_SPEECH_MS = 5000
 FOLLOWUP_NO_SPEECH_MS = 12000
-SPEECH_RMS = 1200
-FOLLOWUP_SPEECH_RMS = 1200
-FOLLOWUP_SPEECH_FRAMES = 1
+SPEECH_RMS = 1600
+FOLLOWUP_SPEECH_RMS = 2800
+FOLLOWUP_SPEECH_FRAMES = 4
+NEAR_RMS = 3500
+FOLLOWUP_NEAR_RMS = 4500
 MAX_FOLLOWUPS = 8
 try:
     BLANK_SEC = max(5, int(os.environ.get("SCREEN_IDLE_SEC", "60")))
@@ -475,6 +477,7 @@ def _record_stream(
     no_speech_ms: int = NO_SPEECH_MS,
     speech_rms: int = SPEECH_RMS,
     min_speech_frames: int = 1,
+    near_rms: int = NEAR_RMS,
 ) -> bytes:
     proc = subprocess.Popen(
         [
@@ -497,6 +500,7 @@ def _record_stream(
     rv_state = None
     heard = False
     speech_frames = 0
+    floor = 400.0
     t0 = time.time()
     last_voice = t0
     time.sleep(0.25)
@@ -515,13 +519,16 @@ def _record_stream(
             buf.extend(pcm)
             now = time.time()
             if auto:
-                if _rms(pcm) >= speech_rms:
+                r = _rms(pcm)
+                thresh = max(speech_rms, near_rms, int(floor * 3.2))
+                if r < thresh:
+                    floor = floor * 0.9 + r * 0.1
+                    speech_frames = 0
+                else:
                     speech_frames += 1
                     if speech_frames >= min_speech_frames:
                         heard = True
                         last_voice = now
-                else:
-                    speech_frames = 0
                 if len(buf) >= MAX_CMD:
                     break
                 if heard and (now - last_voice) * 1000 >= SILENCE_MS and len(buf) >= MIN_CMD:
@@ -572,7 +579,8 @@ def _run_turn(auto: bool, followup: bool = False) -> dict:
             auto,
             FOLLOWUP_NO_SPEECH_MS if followup else NO_SPEECH_MS,
             speech_rms=FOLLOWUP_SPEECH_RMS if followup else SPEECH_RMS,
-            min_speech_frames=FOLLOWUP_SPEECH_FRAMES if followup else 1,
+            min_speech_frames=FOLLOWUP_SPEECH_FRAMES if followup else 2,
+            near_rms=FOLLOWUP_NEAR_RMS if followup else NEAR_RMS,
         )
         _speaker_on()
         if _mic_muted:

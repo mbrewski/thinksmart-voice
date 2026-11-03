@@ -53,11 +53,13 @@ PREROLL = RATE_OUT * 2  # 1.0s
 MAX_CLIP = RATE_OUT * 2 * 13 // 10  # 1.3s; wake is short, TV lines are not
 MIN_CLIP = RATE_OUT * 2 * 5 // 10  # 0.5s
 STT_COOLDOWN = 2.4
-TV_COOLDOWN = 8.0
-TV_PAUSE_S = 90.0
-THRESH_MIN = 1600
-FLOOR_MULT = 2.8
-SPEECH_FRAMES = 3
+TV_COOLDOWN = 12.0
+TV_PAUSE_S = 180.0
+THRESH_MIN = 2000
+FLOOR_MULT = 3.4
+SPEECH_FRAMES = 4
+NEAR_RMS = 5000
+TV_FLOOR = 900
 WAKE_RE = re.compile(r"\b(hey|ok|okay)\s+(grok|grock)\b", re.I)
 
 
@@ -247,12 +249,16 @@ class Gate:
             return
         now = time.time()
         clip_rms = _rms(pcm)
-        near = clip_rms >= max(6000, int(self.floor * 4.5))
+        near = clip_rms >= max(NEAR_RMS, int(self.floor * 5.0))
+        tvish = self.floor >= TV_FLOOR
+        if tvish and not near:
+            _log(f"skip tv floor clip rms={clip_rms} floor={int(self.floor)}")
+            return
         if now < self.quiet_until and not near:
             return
         if now - self.last_stt < self.next_stt_wait:
             return
-        if clip_rms < max(THRESH_MIN, int(self.floor * 2.4)):
+        if clip_rms < max(THRESH_MIN, int(self.floor * 2.8)):
             _log(f"skip quiet clip rms={clip_rms} floor={int(self.floor)}")
             return
         if not self.stt_lock.acquire(blocking=False):
@@ -277,7 +283,8 @@ class Gate:
                 self.misses = [t for t in self.misses if now - t < 12.0]
                 self.misses.append(now)
                 self.next_stt_wait = TV_COOLDOWN
-                if len(self.misses) >= 2:
+                need = 1 if self.floor >= TV_FLOOR else 2
+                if len(self.misses) >= need:
                     self.quiet_until = now + TV_PAUSE_S
                     _log(f"tv-like speech, wake paused {int(TV_PAUSE_S)}s")
             else:
