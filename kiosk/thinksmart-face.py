@@ -69,12 +69,12 @@ RATE_OUT = 16000
 BYTES_100MS = RATE_IN * 2 * 4 // 10
 MIN_CMD = RATE_OUT * 2 * 8 // 10
 MAX_CMD = RATE_OUT * 2 * 10
-SILENCE_MS = 1100
+SILENCE_MS = 1600
 NO_SPEECH_MS = 5000
 FOLLOWUP_NO_SPEECH_MS = 12000
-SPEECH_RMS = 1400
-FOLLOWUP_SPEECH_RMS = 1800
-FOLLOWUP_SPEECH_FRAMES = 2
+SPEECH_RMS = 1200
+FOLLOWUP_SPEECH_RMS = 1200
+FOLLOWUP_SPEECH_FRAMES = 1
 MAX_FOLLOWUPS = 8
 try:
     BLANK_SEC = max(5, int(os.environ.get("SCREEN_IDLE_SEC", "60")))
@@ -391,7 +391,9 @@ def _play_file(path: str, dur: float) -> None:
                 _mode = "idle"
         if finished:
             _set_state(face="idle", hint=HINT_IDLE, busy=False)
-            if not _followup_skip:
+            if _followup_skip:
+                _busy_off()
+            else:
                 threading.Thread(target=_maybe_followup, daemon=True).start()
         if proc.returncode not in (0, None, -signal.SIGTERM, -signal.SIGKILL):
             subprocess.run(
@@ -497,6 +499,7 @@ def _record_stream(
     speech_frames = 0
     t0 = time.time()
     last_voice = t0
+    time.sleep(0.25)
     try:
         while proc.poll() is None:
             if _stop.is_set() and not auto:
@@ -541,12 +544,14 @@ def _record_stream(
 def _maybe_followup() -> None:
     time.sleep(0.4)
     if _followup_skip or _mic_muted:
+        _busy_off()
         return
     with _lock:
         if _mode not in ("idle", "speak"):
             return
         if _followup_depth >= MAX_FOLLOWUPS:
             _mode = "idle"
+            _busy_off()
             return
     _start_rec(True, followup=True)
 
@@ -613,7 +618,7 @@ def _run_turn(auto: bool, followup: bool = False) -> dict:
             _result = data
         if not speaking:
             _followup_depth = 0
-        _busy_off()
+            _busy_off()
         return data
     except Exception:
         with _lock:
@@ -635,6 +640,7 @@ def _start_rec(auto: bool, followup: bool = False) -> bool:
         _followup_depth = 0
     if _mic_muted:
         return False
+    _busy_on()
     with _lock:
         if _mode in ("listen", "hold", "busy"):
             return True
