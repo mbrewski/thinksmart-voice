@@ -58,8 +58,9 @@ TV_PAUSE_S = 180.0
 THRESH_MIN = 2000
 FLOOR_MULT = 3.4
 SPEECH_FRAMES = 4
-NEAR_RMS = 5000
-TV_FLOOR = 900
+NEAR_RMS = 3500
+TV_FLOOR = 1600
+BUSY_STALE_S = 45.0
 WAKE_RE = re.compile(r"\b(hey|ok|okay)\s+(grok|grock)\b", re.I)
 
 
@@ -82,9 +83,19 @@ def _log(msg: str) -> None:
 
 def _busy() -> bool:
     try:
-        return os.path.exists(BUSY)
+        st = os.stat(BUSY)
+    except FileNotFoundError:
+        return False
     except OSError:
         return False
+    if time.time() - st.st_mtime > BUSY_STALE_S:
+        try:
+            os.remove(BUSY)
+            _log("cleared stale kiosk-busy")
+        except OSError:
+            pass
+        return False
+    return True
 
 
 def _rms(pcm: bytes) -> int:

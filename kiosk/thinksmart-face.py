@@ -387,17 +387,8 @@ def _play_file(path: str, dur: float) -> None:
                 restore = None
         if restore is not None:
             _wpctl("set-volume", "@DEFAULT_AUDIO_SINK@", f"{restore:.2f}")
-        with _lock:
-            finished = _mode == "speak" and proc.returncode == 0
-            if finished:
-                _mode = "idle"
-        if finished:
-            _set_state(face="idle", hint=HINT_IDLE, busy=False)
-            if _followup_skip:
-                _busy_off()
-            else:
-                threading.Thread(target=_maybe_followup, daemon=True).start()
-        if proc.returncode not in (0, None, -signal.SIGTERM, -signal.SIGKILL):
+        rc = proc.returncode
+        if rc not in (0, None, -signal.SIGTERM, -signal.SIGKILL):
             subprocess.run(
                 ["paplay", path],
                 env=env,
@@ -407,6 +398,20 @@ def _play_file(path: str, dur: float) -> None:
                 timeout=max(8, int(dur) + 6),
                 check=False,
             )
+        interrupted = _followup_skip or rc in (-signal.SIGTERM, -signal.SIGKILL)
+        with _lock:
+            still_speak = _mode == "speak"
+            if still_speak:
+                _mode = "idle"
+        if not still_speak:
+            if interrupted:
+                _busy_off()
+            return
+        _set_state(face="idle", hint=HINT_IDLE, busy=False)
+        if interrupted:
+            _busy_off()
+            return
+        threading.Thread(target=_maybe_followup, daemon=True).start()
 
     threading.Thread(target=_wait, daemon=True).start()
 
