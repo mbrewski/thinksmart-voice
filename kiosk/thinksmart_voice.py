@@ -61,7 +61,7 @@ def _instructions() -> str:
 
 
 def _tools() -> list[dict[str, Any]]:
-    return [
+    tools: list[dict[str, Any]] = [
         {
             "type": "web_search",
             "location": {
@@ -71,6 +71,22 @@ def _tools() -> list[dict[str, Any]]:
             },
         }
     ]
+    mcp_url = (os.environ.get("MCP_URL") or "").strip()
+    if mcp_url:
+        mcp: dict[str, Any] = {
+            "type": "mcp",
+            "server_url": mcp_url,
+            "server_label": os.environ.get("MCP_LABEL", "home-assistant").strip() or "home-assistant",
+        }
+        cid = (os.environ.get("CF_ACCESS_CLIENT_ID") or "").strip()
+        csec = (os.environ.get("CF_ACCESS_CLIENT_SECRET") or "").strip()
+        if cid and csec:
+            mcp["headers"] = {
+                "CF-Access-Client-Id": cid,
+                "CF-Access-Client-Secret": csec,
+            }
+        tools.append(mcp)
+    return tools
 
 
 def _session_payload() -> dict[str, Any]:
