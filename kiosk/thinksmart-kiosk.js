@@ -5,6 +5,7 @@
   const timeEl = document.getElementById("clock-time");
   const dateEl = document.getElementById("clock-date");
   const blankEl = document.getElementById("blank");
+  const gearEl = document.getElementById("gear");
   const player = document.getElementById("player");
 
   let clockTz = "UTC";
@@ -102,7 +103,7 @@
   }
 
   async function startRec() {
-    if (screenBlank || rec || faceMode === "sleep") return;
+    if (rec || faceMode === "sleep") return;
     if (busy && faceMode !== "speak") return;
     rec = true;
     localHold = true;
@@ -131,20 +132,41 @@
       return;
     }
     rec = false;
+    localHold = false;
     busy = true;
     setFace("idle", "thinking", "");
     try {
       const res = await fetch("/rec/stop", { method: "POST" });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "turn failed");
-      setFace("idle", "ready", "", "say hey grok, or press to talk");
-      busy = false;
-      localHold = false;
+      busy = !!data.busy;
     } catch (err) {
       setFace("error", "error", String(err.message || err));
       busy = false;
-      localHold = false;
     }
+  }
+
+  let exiting = false;
+  async function exitKiosk() {
+    if (exiting) return;
+    exiting = true;
+    try {
+      await fetch("/quit", { method: "POST" });
+    } catch {}
+  }
+
+  if (gearEl) {
+    gearEl.addEventListener("pointerdown", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      exitKiosk();
+    });
+    gearEl.addEventListener("pointerup", (ev) => ev.stopPropagation());
+    gearEl.addEventListener("pointercancel", (ev) => ev.stopPropagation());
+    gearEl.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+    });
   }
 
   document.body.addEventListener("pointerdown", (ev) => {
@@ -152,7 +174,6 @@
     ev.preventDefault();
     if (screenBlank) {
       unblank();
-      return;
     }
     try {
       document.body.setPointerCapture(ev.pointerId);

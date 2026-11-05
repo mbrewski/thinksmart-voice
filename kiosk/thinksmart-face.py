@@ -10,13 +10,7 @@ import os
 import select
 import shutil
 import signal
-try:
-    import audioop
-except ImportError:
-    try:
-        import audioop_lts as audioop  # type: ignore
-    except ImportError:
-        import audioop_compat as audioop  # type: ignore
+import sys
 import http.client
 import subprocess
 import threading
@@ -25,35 +19,29 @@ import urllib.parse
 import urllib.request
 import wave
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+
+from thinksmart_audio import audioop, chunk_bytes, ingest, pcm_wav, pw_record_argv, rms, write_private
+from thinksmart_config import (
+    BUSY,
+    RATE_IN,
+    RATE_OUT,
+    TMPDIR,
+    ensure_tmpdir,
+    load_kiosk_env,
+    pipewire_env,
+    rotating_log,
+)
+
+load_kiosk_env(HERE)
+
 import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("WebKit", "6.0")
 from gi.repository import Gtk, WebKit
-
-HERE = os.path.dirname(os.path.abspath(__file__))
-
-
-def _load_env_file(path: str) -> None:
-    try:
-        with open(path, encoding="utf-8") as fh:
-            for raw in fh:
-                line = raw.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, _, val = line.partition("=")
-                key = key.strip()
-                val = val.strip().strip('"').strip("'")
-                if key and key not in os.environ:
-                    os.environ[key] = val
-    except FileNotFoundError:
-        pass
-    except OSError:
-        pass
-
-
-_load_env_file("/etc/thinksmart-kiosk.env")
-_load_env_file(os.path.join(HERE, "kiosk.env"))
 
 
 if not (os.environ.get("XAI_API_KEY") or "").strip():
@@ -61,30 +49,26 @@ if not (os.environ.get("XAI_API_KEY") or "").strip():
 
 CLOCK_TZ = os.environ.get("CLOCK_TZ", os.environ.get("TZ", "UTC"))
 PORT = 1680
-URL = f"http://127.0.0.1:{PORT}/thinksmart-kiosk.html?v=42"
-REC_WAV = "/tmp/kiosk-rec.wav"
-BUSY = "/tmp/kiosk-busy"
-MIC = "alsa_input.platform-c051000.sound-card.HiFi__Microphone__source"
+URL = f"http://127.0.0.1:{PORT}/thinksmart-kiosk.html"
+ensure_tmpdir()
+REC_WAV = os.path.join(TMPDIR, "rec.wav")
 HINT_IDLE = "say hey grok, or press to talk"
 HINT_LISTEN = "Listening"
 HINT_MUTE = "mic muted"
 SW_MICROPHONE_INSERT = 4
-MUTE_DEV = "/dev/input/event0"
+MUTE_DEV = os.environ.get("THINKSMART_MUTE_DEV", "/dev/input/event0")
 FACE_STREAM = (os.environ.get("FACE_STREAM") or "").strip()
 
-RATE_IN = 48000
-RATE_OUT = 16000
-BYTES_100MS = RATE_IN * 2 * 4 // 10
 MIN_CMD = RATE_OUT * 2 * 8 // 10
 MAX_CMD = RATE_OUT * 2 * 10
 SILENCE_MS = 1600
 NO_SPEECH_MS = 5000
 FOLLOWUP_NO_SPEECH_MS = 12000
 SPEECH_RMS = 1600
-FOLLOWUP_SPEECH_RMS = 2800
-FOLLOWUP_SPEECH_FRAMES = 4
+FOLLOWUP_SPEECH_RMS = 1600
+FOLLOWUP_SPEECH_FRAMES = 2
 NEAR_RMS = 3500
-FOLLOWUP_NEAR_RMS = 4500
+FOLLOWUP_NEAR_RMS = 3500
 MAX_FOLLOWUPS = 8
 try:
     BLANK_SEC = max(5, int(os.environ.get("SCREEN_IDLE_SEC", "60")))
@@ -125,35 +109,18 @@ FACE_POSE = {
 
 
 def _env():
-    env = os.environ.copy()
-    env["XDG_RUNTIME_DIR"] = "/run/user/1000"
-    env["PULSE_SERVER"] = "unix:/run/user/1000/pulse/native"
-    return env
+    return pipewire_env()
 
 
 def _log(msg: str) -> None:
-    line = time.strftime("%H:%M:%S ") + msg
-    print(line, flush=True)
-    path = "/tmp/kiosk-wake.log"
-    try:
-        if os.path.exists(path) and os.path.getsize(path) > 1_500_000:
-            os.replace(path, path + ".1")
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(line + "\n")
-    except OSError:
-        pass
+    rotating_log("/tmp/kiosk-face.log", msg)
 
 
 def _push_face(name: str) -> None:
     def _go() -> None:
         try:
             pose = FACE_POSE.get(name, name)
-            subprocess.run(
-                ["curl", "-sS", "-m", "1", f"{FACE_STREAM}/face?name={pose}"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-            )
+            urllib.request.urlopen(f"{FACE_STREAM}/face?name={pose}", timeout=1).read()
         except OSError:
             pass
 
@@ -292,25 +259,11 @@ def _wav_seconds(data: bytes) -> float:
 
 
 def _pcm_wav(pcm: bytes, rate: int = RATE_OUT) -> bytes:
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(rate)
-        wf.writeframes(pcm)
-    return buf.getvalue()
+    return pcm_wav(pcm, rate)
 
 
 def _rms(pcm: bytes) -> int:
-    n = len(pcm) // 2
-    if n <= 0:
-        return 0
-    samples = array.array("h")
-    samples.frombytes(pcm[: n * 2])
-    acc = 0
-    for x in samples:
-        acc += x * x
-    return int((acc / n) ** 0.5)
+    return rms(pcm)
 
 
 def _sink_vol() -> float:
@@ -331,7 +284,7 @@ def _sink_vol() -> float:
     return 1.0
 
 
-def _fade_s16_stereo(pcm: bytes, rate: int = 48000, ms: int = 18) -> bytes:
+def _fade_s16_stereo(pcm: bytes, rate: int = RATE_IN, ms: int = 18) -> bytes:
     samples = array.array("h")
     samples.frombytes(pcm)
     nch = 2
@@ -358,16 +311,16 @@ def _to_s16_stereo_48k(raw: bytes) -> bytes:
         pcm = audioop.tomono(pcm, 2, 0.5, 0.5)
     elif ch != 1:
         pcm = audioop.tomono(pcm, 2, 1.0, 0.0)
-    if rate != 48000:
-        pcm, _st = audioop.ratecv(pcm, 2, 1, rate, 48000, None)
+    if rate != RATE_IN:
+        pcm, _st = audioop.ratecv(pcm, 2, 1, rate, RATE_IN, None)
     pcm = audioop.tostereo(pcm, 2, 1.0, 1.0)
-    pad = b"\x00\x00\x00\x00" * int(48000 * 0.06)
+    pad = b"\x00\x00\x00\x00" * int(RATE_IN * 0.06)
     pcm = _fade_s16_stereo(pcm)
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
         wf.setnchannels(2)
         wf.setsampwidth(2)
-        wf.setframerate(48000)
+        wf.setframerate(RATE_IN)
         wf.writeframes(pad + pcm)
     return buf.getvalue()
 
@@ -393,8 +346,11 @@ def _stop_play() -> None:
 
 
 def _play_file(path: str, dur: float) -> None:
-    global _play_proc, _followup_skip
+    global _play_proc, _followup_skip, _mode
     _followup_skip = False
+    with _lock:
+        if _mode in ("idle", "busy"):
+            _mode = "speak"
     env = _env()
     proc = subprocess.Popen(
         ["pw-play", "--latency=120ms", path],
@@ -407,7 +363,7 @@ def _play_file(path: str, dur: float) -> None:
         _play_proc = proc
 
     def _wait() -> None:
-        global _play_proc, _play_vol_restore
+        global _play_proc, _play_vol_restore, _mode
         try:
             proc.wait(timeout=max(8, int(dur) + 6))
         except subprocess.TimeoutExpired:
@@ -434,17 +390,18 @@ def _play_file(path: str, dur: float) -> None:
                 check=False,
             )
         interrupted = _followup_skip or rc in (-signal.SIGTERM, -signal.SIGKILL)
+        _busy_on()
         with _lock:
-            still_speak = _mode == "speak"
-            if still_speak:
-                _mode = "idle"
-        if not still_speak:
-            if interrupted:
-                _busy_off()
-            return
-        _set_state(face="idle", hint=HINT_IDLE, busy=False)
+            still_ours = _mode in ("speak", "busy")
+        _log(f"tts done rc={rc} skip={_followup_skip} mode={_mode} ours={still_ours}")
         if interrupted:
+            with _lock:
+                if _mode in ("speak", "busy"):
+                    _mode = "idle"
+            _set_state(face="idle", hint=HINT_IDLE, busy=False)
             _busy_off()
+            return
+        if not still_ours:
             return
         threading.Thread(target=_maybe_followup, daemon=True).start()
 
@@ -458,16 +415,16 @@ def _play_b64(b64: str) -> float:
         raw = base64.b64decode(b64)
     except Exception:
         return 0.0
-    path = "/tmp/kiosk-tts.wav"
-    hot = "/tmp/kiosk-tts-hot.wav"
+    path = os.path.join(TMPDIR, "tts.wav")
+    hot = os.path.join(TMPDIR, "tts-hot.wav")
     try:
-        open(path, "wb").write(raw)
+        write_private(path, raw)
     except OSError:
         return 0.0
     dur = _wav_seconds(raw)
     try:
         cooked = _to_s16_stereo_48k(raw)
-        open(hot, "wb").write(cooked)
+        write_private(hot, cooked)
         play = hot
     except Exception as e:
         _log(f"tts resample fail {e}")
@@ -488,7 +445,7 @@ def _post_turn(pcm: bytes) -> dict:
         return {"transcript": "", "reply": "I did not catch that.", "audio_b64": "", "duration": 0}
     wav = _pcm_wav(pcm)
     try:
-        open(REC_WAV, "wb").write(wav)
+        write_private(REC_WAV, wav)
     except OSError:
         pass
     try:
@@ -520,16 +477,7 @@ def _record_stream(
     near_rms: int = NEAR_RMS,
 ) -> bytes:
     proc = subprocess.Popen(
-        [
-            "/usr/bin/pw-record",
-            "--rate=48000",
-            "--channels=2",
-            "--format=s32",
-            "--latency=50ms",
-            "--target",
-            MIC,
-            "-",
-        ],
+        pw_record_argv("50ms"),
         env=_env(),
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
@@ -541,8 +489,10 @@ def _record_stream(
     heard = False
     speech_frames = 0
     floor = 400.0
+    peak = 0
     t0 = time.time()
     last_voice = t0
+    last_busy = t0
     time.sleep(0.25)
     try:
         while proc.poll() is None:
@@ -554,18 +504,21 @@ def _record_stream(
                 if time.time() - t0 > 25:
                     break
                 continue
-            raw = proc.stdout.read(BYTES_100MS)
+            raw = proc.stdout.read(chunk_bytes())
             if not raw:
                 break
-            s16 = audioop.lin2lin(raw, 4, 2)
-            mono = audioop.tomono(s16, 2, 0.5, 0.5)
-            pcm, rv_state = audioop.ratecv(mono, 2, 1, RATE_IN, RATE_OUT, rv_state)
+            pcm, rv_state = ingest(raw, rv_state)
             if not pcm:
                 continue
             buf.extend(pcm)
             now = time.time()
+            if now - last_busy >= 5:
+                _busy_on()
+                last_busy = now
             if auto and not _take_hold:
                 r = _rms(pcm)
+                if r > peak:
+                    peak = r
                 thresh = max(speech_rms, near_rms, int(floor * 3.2))
                 if r < thresh:
                     floor = floor * 0.9 + r * 0.1
@@ -591,21 +544,26 @@ def _record_stream(
                 proc.wait(timeout=2)
             except subprocess.TimeoutExpired:
                 proc.kill()
+    _log(f"rec auto={auto} heard={heard} peak={peak} bytes={len(buf)} floor={int(floor)}")
     return bytes(buf)
 
 
 def _maybe_followup() -> None:
-    time.sleep(0.4)
+    global _mode
+    time.sleep(0.25)
     if _followup_skip or _mic_muted:
+        _log(f"followup skip skip={_followup_skip} mute={_mic_muted}")
         _busy_off()
         return
     with _lock:
-        if _mode not in ("idle", "speak"):
+        if _mode not in ("idle", "speak", "busy"):
+            _log(f"followup skip mode={_mode}")
             return
         if _followup_depth >= MAX_FOLLOWUPS:
             _mode = "idle"
             _busy_off()
             return
+    _log("followup listen")
     _start_rec(True, followup=True)
 
 
@@ -638,6 +596,7 @@ def _run_turn(auto: bool, followup: bool = False) -> dict:
             _busy_off()
             return {}
         if followup and len(pcm) < MIN_CMD:
+            _log(f"followup empty pcm={len(pcm)}")
             _set_state(face="idle", status="ready", caption="", hint=HINT_IDLE, busy=False)
             with _lock:
                 _mode = "idle"
@@ -660,6 +619,17 @@ def _run_turn(auto: bool, followup: bool = False) -> dict:
             _busy_off()
             return data
         speaking = bool(data.get("audio_b64"))
+        with _lock:
+            mode_now = _mode
+            _result = data
+            if speaking and mode_now == "busy":
+                _mode = "speak"
+                mode_now = "speak"
+            elif not speaking:
+                _mode = "idle"
+                mode_now = "idle"
+        if mode_now in ("listen", "hold"):
+            return data
         _set_state(
             face="speak" if speaking else "idle",
             status="speaking" if speaking else (heard or "ready"),
@@ -667,9 +637,6 @@ def _run_turn(auto: bool, followup: bool = False) -> dict:
             hint=HINT_IDLE,
             busy=False,
         )
-        with _lock:
-            _mode = "speak" if speaking else "idle"
-            _result = data
         if not speaking:
             _followup_depth = 0
             _busy_off()
@@ -696,11 +663,14 @@ def _start_rec(auto: bool, followup: bool = False) -> bool:
         return False
     _busy_on()
     with _lock:
-        if _mode == "listen" and not auto:
+        if followup:
+            if _mode in ("listen", "hold"):
+                return True
+        elif _mode == "listen" and not auto:
             _take_hold = True
             _mode = "hold"
             return True
-        if _mode in ("listen", "hold", "busy"):
+        elif _mode in ("listen", "hold", "busy"):
             return True
         _take_hold = False
         _mode = "listen" if auto else "hold"
@@ -718,20 +688,21 @@ def _stop_and_turn() -> dict:
     if mode not in ("hold", "listen"):
         return data or dict(_state)
     _stop.set()
-    for _ in range(1000):
+    for _ in range(200):
         with _lock:
             mode = _mode
             data = dict(_result)
-        if mode == "idle":
+        if mode in ("idle", "busy", "speak"):
             return data or dict(_state)
         time.sleep(0.1)
     return dict(_state)
 
 
-class Handler(http.server.SimpleHTTPRequestHandler):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory=HERE, **kwargs)
+def _http_path(raw: str) -> str:
+    return urllib.parse.urlparse(raw).path
 
+
+class Handler(http.server.BaseHTTPRequestHandler):
     def end_headers(self):
         self.send_header("Cache-Control", "no-store")
         super().end_headers()
@@ -740,40 +711,79 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        if self.path.startswith("/state"):
+        path = _http_path(self.path)
+        if path == "/state":
             self._json(200, dict(_state))
             return
-        if self.path.startswith("/bot.jpg"):
+        if path == "/bot.jpg":
             if not FACE_STREAM:
                 self.send_error(404)
                 return
             self._proxy_jpg()
             return
-        if self.path.startswith("/bot.mjpeg"):
+        if path == "/bot.mjpeg":
             self._proxy_mjpeg()
             return
-        if self.path.startswith("/bot/face"):
+        if path == "/bot/face":
             self._proxy_face()
             return
-        super().do_GET()
+        self._serve_static(path)
 
     def do_POST(self):
-        if self.path.startswith("/rec/start"):
+        path = _http_path(self.path)
+        if path == "/rec/start":
             ok = _start_rec(False)
             self._json(200 if ok else 500, {"ok": ok})
             return
-        if self.path.startswith("/rec/stop"):
+        if path == "/rec/stop":
             self._json(200, _stop_and_turn())
             return
-        if self.path.startswith("/wake"):
+        if path == "/wake":
             ok = _start_rec(True)
             self._json(200 if ok else 409, {"ok": ok})
             return
-        if self.path.startswith("/unblank"):
+        if path == "/unblank":
             _poke()
             self._json(200, {"ok": True})
             return
+        if path == "/quit":
+            _exit_to_terminal()
+            self._json(200, {"ok": True})
+            return
         self.send_error(404)
+
+    def _serve_static(self, path: str) -> None:
+        allowed = {
+            "/thinksmart-kiosk.html": ("text/html; charset=utf-8", "thinksmart-kiosk.html"),
+            "/thinksmart-kiosk.js": ("text/javascript; charset=utf-8", "thinksmart-kiosk.js"),
+        }
+        rel = None
+        ctype = "application/octet-stream"
+        if path in allowed:
+            ctype, rel = allowed[path]
+        elif path.startswith("/faces/") and ".." not in path:
+            name = path[len("/faces/") :]
+            if name.endswith(".jpg") and "/" not in name.replace("blink/", "", 1):
+                rel = os.path.join("faces", name)
+                ctype = "image/jpeg"
+        if not rel:
+            self.send_error(404)
+            return
+        full = os.path.realpath(os.path.join(HERE, rel))
+        root = os.path.realpath(HERE)
+        if full != root and not full.startswith(root + os.sep):
+            self.send_error(404)
+            return
+        try:
+            data = open(full, "rb").read()
+        except OSError:
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def _proxy_face(self):
         q = ""
@@ -855,6 +865,29 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
 
+def _exit_to_terminal() -> None:
+    unit = f"thinksmart-kiosk-exit-{int(time.time())}"
+    try:
+        subprocess.Popen(
+            [
+                "sudo",
+                "-n",
+                "systemd-run",
+                "--collect",
+                "--quiet",
+                f"--unit={unit}",
+                "/usr/local/bin/exit-to-terminal.sh",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError as e:
+        _log(f"exit to terminal failed {e}")
+        return
+    _log("exit to terminal")
+
+
 def _serve():
     httpd = http.server.ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     httpd.serve_forever()
@@ -868,22 +901,59 @@ class Kiosk(Gtk.Application):
         win = Gtk.ApplicationWindow(application=self)
         win.set_title("Voice")
         win.set_decorated(False)
+        win.set_default_size(800, 1280)
         win.fullscreen()
+        data_dir = os.path.expanduser("~/.local/share/thinksmart-kiosk")
+        cache_dir = os.path.expanduser("~/.cache/thinksmart-kiosk")
+        os.makedirs(data_dir, exist_ok=True)
+        os.makedirs(cache_dir, exist_ok=True)
         try:
-            ctx = WebKit.WebContext.get_default()
+            mgr = WebKit.WebsiteDataManager(
+                base_data_directory=data_dir,
+                base_cache_directory=cache_dir,
+            )
+            ctx = WebKit.WebContext.new_with_website_data_manager(mgr)
             ctx.set_sandbox_enabled(False)
+            webview = WebKit.WebView.new_with_context(ctx)
         except Exception:
-            pass
-        webview = WebKit.WebView()
+            try:
+                ctx = WebKit.WebContext.get_default()
+                ctx.set_sandbox_enabled(False)
+            except Exception:
+                pass
+            webview = WebKit.WebView()
         settings = webview.get_settings()
         for name, value in (
-            ("media-playback-requires-user-gesture", False),
+            ("media-playback-requires-user-gesture", True),
             ("enable-javascript", True),
         ):
             try:
                 settings.set_property(name, value)
             except Exception:
                 pass
+        try:
+            settings.set_hardware_acceleration_policy(
+                WebKit.HardwareAccelerationPolicy.NEVER
+            )
+        except Exception as e:
+            _log(f"webkit accel {e}")
+            try:
+                settings.set_property("hardware-acceleration-policy", 2)
+            except Exception:
+                pass
+        webview.set_hexpand(True)
+        webview.set_vexpand(True)
+
+        def on_load_fail(_w, _ev, _f, err):
+            _log(f"webkit load-failed {err}")
+            return False
+
+        def on_load_changed(_w, ev):
+            if int(ev) == 3:
+                _log(f"webkit load {_w.get_uri()}")
+
+        webview.connect("load-failed", on_load_fail)
+        webview.connect("load-changed", on_load_changed)
         webview.load_uri(URL)
         win.set_child(webview)
         win.present()

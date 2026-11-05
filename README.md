@@ -10,7 +10,8 @@ Flash and 6.12 hybrid boot live in [thinksmart-flash](https://github.com/mbrewsk
 - Eve via Grok Voice (`grok-voice-latest`), clip-then-reply (`turn_detection: null`)
 - `web_search` on the Voice session
 - Local wake (RMS + optional Sherpa; fallback xAI `/stt`)
-- Black overlay after `SCREEN_IDLE_SEC` (default 60); tap or wake turns the glass back on. User `idle-blanker` is masked so the Himax backlight is not killed.
+- Black overlay after `SCREEN_IDLE_SEC` (default 60); tap or wake turns the glass back on. `idle-blanker.service` is masked so the Himax backlight is not killed.
+- Gear (top right) stops the kiosk and switches to the tty2 login. Run `start-kiosk.sh` on the panel to bring it back.
 - JPEG stills in `kiosk/faces/` (no Bloub required)
 
 ## Configure

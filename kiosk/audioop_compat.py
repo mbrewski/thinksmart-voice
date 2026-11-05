@@ -2,9 +2,17 @@
 from __future__ import annotations
 
 import array
+import logging
+from typing import Any
+
+
+logger = logging.getLogger("thinksmart-audio")
 
 
 def lin2lin(fragment: bytes, width: int, newwidth: int) -> bytes:
+    """Convert sample format between widths (e.g., s32 stereo ↔ s16 mono)."""
+    if not fragment or width == 0 or newwidth <= 0:
+        raise ValueError(f"Invalid audio data for lin2lin: {len(fragment)} samples, {width}->{newwidth}")
     if width == newwidth:
         return fragment
     n = len(fragment) // width
@@ -25,11 +33,13 @@ def lin2lin(fragment: bytes, width: int, newwidth: int) -> bytes:
 
 
 def tomono(fragment: bytes, width: int, lfactor: float, rfactor: float) -> bytes:
-    if width != 2:
-        raise NotImplementedError("tomono width")
+    """Convert stereo PCM to mono using left/right factors."""
+    if not fragment or width != 2:
+        raise ValueError(f"Invalid audio data for tomono: {len(fragment)} samples")
     samples = array.array("h")
     samples.frombytes(fragment)
     out = array.array("h")
+    # Process all but last sample (which may be incomplete in stereo pair)
     for i in range(0, len(samples) - 1, 2):
         v = int(samples[i] * lfactor + samples[i + 1] * rfactor)
         out.append(max(-32768, min(32767, v)))
@@ -37,8 +47,9 @@ def tomono(fragment: bytes, width: int, lfactor: float, rfactor: float) -> bytes
 
 
 def tostereo(fragment: bytes, width: int, lfactor: float, rfactor: float) -> bytes:
-    if width != 2:
-        raise NotImplementedError("tostereo width")
+    """Convert mono PCM to stereo by duplicating with left/right factors."""
+    if not fragment or width != 2:
+        raise ValueError(f"Invalid audio data for tostereo: {len(fragment)} samples")
     samples = array.array("h")
     samples.frombytes(fragment)
     out = array.array("h")
@@ -56,19 +67,25 @@ def ratecv(
     nchannels: int,
     inrate: int,
     outrate: int,
-    state,
+    state: Any,
     weightA: int = 1,
     weightB: int = 0,
-):
-    del weightA, weightB
-    if width != 2:
-        raise NotImplementedError("ratecv width")
+) -> tuple[bytes, Any]:
+    """Resample audio from one sample rate to another using linear interpolation."""
+    del weightA, weightB  # unused parameters for compatibility with original API
+    if not fragment or width != 2 or nchannels <= 0 or inrate <= 0 or outrate <= 0:
+        raise ValueError(f"Invalid arguments for ratecv")
     if inrate == outrate:
         return fragment, state
     samples = array.array("h")
-    samples.frombytes(fragment)
+    try:
+        samples.frombytes(fragment)
+    except (ValueError, OverflowError):
+        logger.warning(f"Failed to decode audio data of {len(fragment)} bytes for resampling")
+        return fragment, state
     frames = len(samples) // nchannels
     if frames <= 1:
+        # Not enough samples for meaningful resampling; pass through unchanged
         return fragment, state
     out_frames = max(1, int(frames * outrate / inrate))
     out = array.array("h")
@@ -85,11 +102,17 @@ def ratecv(
 
 
 def rms(fragment: bytes, width: int) -> int:
-    if width != 2 or not fragment:
+    """Calculate RMS (root mean square) amplitude of audio data."""
+    if not fragment or len(fragment) % 2 != 0 or width != 2:
         return 0
     samples = array.array("h")
-    samples.frombytes(fragment[: len(fragment) - (len(fragment) % 2)])
-    if not samples:
+    try:
+        # Truncate to even number of bytes for valid sample pairs
+        trunc_bytes = len(fragment) - (len(fragment) % 2)
+        truncated_data = fragment[:trunc_bytes] if trunc_bytes > 0 else b""
+        samples.frombytes(truncated_data)
+    except (ValueError, OverflowError):
+        logger.warning(f"Failed to decode audio data of {len(fragment)} bytes for RMS calculation")
         return 0
     acc = 0
     for x in samples:

@@ -23,13 +23,18 @@ apt-get install -y --no-install-recommends \
 install -d -m 755 "$DEST" "$DEST/faces" "$DEST/faces/blink" "$DEST/kws"
 install -m 755 "$SRC/thinksmart-face.py" "$DEST/thinksmart-face.py"
 install -m 644 "$SRC/thinksmart_voice.py" "$DEST/thinksmart_voice.py"
+install -m 644 "$SRC/thinksmart_audio.py" "$DEST/thinksmart_audio.py"
+install -m 644 "$SRC/thinksmart_config.py" "$DEST/thinksmart_config.py"
 install -m 644 "$SRC/audioop_compat.py" "$DEST/audioop_compat.py"
+rm -f "$DEST/thinksmart-voice.py"
 install -m 644 "$SRC/instructions.md" "$DEST/instructions.md"
 install -m 644 "$SRC/thinksmart-kiosk.html" "$DEST/thinksmart-kiosk.html"
 install -m 644 "$SRC/thinksmart-kiosk.js" "$DEST/thinksmart-kiosk.js"
 install -m 644 "$SRC/thinksmart_wakeword.py" "$DEST/thinksmart_wakeword.py"
 install -m 755 "$SRC/thinksmart-wake.py" "$DEST/thinksmart-wake.py"
 install -m 755 "$SRC/thinksmart-watchdog.sh" "$DEST/thinksmart-watchdog.sh"
+install -m 755 "$SRC/exit-to-terminal.sh" /usr/local/bin/exit-to-terminal.sh
+install -m 755 "$SRC/start-kiosk.sh" /usr/local/bin/start-kiosk.sh
 install -m 644 "$SRC/thinksmart-kiosk.cron" /etc/cron.d/thinksmart-kiosk
 install -m 644 "$SRC/bloub-LICENSE.txt" "$DEST/bloub-LICENSE.txt"
 install -m 644 "$SRC/kiosk.env.example" "$DEST/kiosk.env.example"

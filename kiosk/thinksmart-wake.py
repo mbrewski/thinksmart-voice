@@ -2,14 +2,7 @@
 """Sidecar wake: energy gate + Grok STT, optional sherpa. Isolated from GTK."""
 from __future__ import annotations
 
-import io
-try:
-    import audioop
-except ImportError:
-    try:
-        import audioop_lts as audioop  # type: ignore
-    except ImportError:
-        import audioop_compat as audioop  # type: ignore
+import json
 import os
 import re
 import signal
@@ -17,44 +10,24 @@ import subprocess
 import sys
 import threading
 import time
-import wave
+import urllib.request
+import uuid
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
+from thinksmart_audio import chunk_bytes, ingest, pcm_wav, pw_record_argv, rms, write_private
+from thinksmart_config import BUSY, RATE_OUT, TMPDIR, ensure_tmpdir, load_kiosk_env, pipewire_env, rotating_log
 
-def _load_env_file(path: str) -> None:
-    try:
-        with open(path, encoding="utf-8") as fh:
-            for raw in fh:
-                line = raw.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, _, val = line.partition("=")
-                key = key.strip()
-                val = val.strip().strip('"').strip("'")
-                if key and key not in os.environ:
-                    os.environ[key] = val
-    except FileNotFoundError:
-        pass
-    except OSError:
-        pass
+load_kiosk_env(HERE)
+ensure_tmpdir()
 
-
-_load_env_file("/etc/thinksmart-kiosk.env")
-_load_env_file(os.path.join(HERE, "kiosk.env"))
-
-MIC = "alsa_input.platform-c051000.sound-card.HiFi__Microphone__source"
 WAKE_URL = "http://127.0.0.1:1680/wake"
 XAI_API_KEY = (os.environ.get("XAI_API_KEY") or "").strip()
 STT_URL = os.environ.get("STT_URL", "https://api.x.ai/v1/stt")
 STT_MODEL = os.environ.get("GROK_STT_MODEL", "grok-voice-transcribe-2.0")
-BUSY = "/tmp/kiosk-busy"
 LOG = "/tmp/kiosk-wake.log"
-RATE_IN = 48000
-RATE_OUT = 16000
-BYTES_100MS = RATE_IN * 2 * 4 // 10
 PREROLL = RATE_OUT * 2  # 1.0s
 MAX_CLIP = RATE_OUT * 2 * 13 // 10  # 1.3s; wake is short, TV lines are not
 MIN_CLIP = RATE_OUT * 2 * 5 // 10  # 0.5s
@@ -66,27 +39,16 @@ FLOOR_MULT = 3.4
 SPEECH_FRAMES = 4
 NEAR_RMS = 3500
 TV_FLOOR = 1600
-BUSY_STALE_S = 45.0
+BUSY_STALE_S = 180.0
 WAKE_RE = re.compile(r"\b(hey|ok|okay)\s+(grok|grock)\b", re.I)
 
 
 def _env():
-    env = os.environ.copy()
-    env["XDG_RUNTIME_DIR"] = "/run/user/1000"
-    env["PULSE_SERVER"] = "unix:/run/user/1000/pulse/native"
-    return env
+    return pipewire_env()
 
 
 def _log(msg: str) -> None:
-    line = time.strftime("%H:%M:%S ") + msg
-    print(line, flush=True)
-    try:
-        if os.path.exists(LOG) and os.path.getsize(LOG) > 1_500_000:
-            os.replace(LOG, LOG + ".1")
-        with open(LOG, "a", encoding="utf-8") as fh:
-            fh.write(line + "\n")
-    except OSError:
-        pass
+    rotating_log(LOG, msg)
 
 
 def _busy() -> bool:
@@ -107,46 +69,28 @@ def _busy() -> bool:
 
 
 def _rms(pcm: bytes) -> int:
-    import array
-
-    n = len(pcm) // 2
-    if n <= 0:
-        return 0
-    samples = array.array("h")
-    samples.frombytes(pcm[: n * 2])
-    acc = 0
-    for x in samples:
-        acc += x * x
-    return int((acc / n) ** 0.5)
+    return rms(pcm)
 
 
 def _pcm_wav(pcm: bytes) -> bytes:
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(RATE_OUT)
-        wf.writeframes(pcm)
-    return buf.getvalue()
+    return pcm_wav(pcm)
 
 
 def _notify(hit: str) -> None:
     try:
-        subprocess.run(
-            ["curl", "-sS", "-m", "3", "-X", "POST", WAKE_URL, "-d", "{}"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
+        req = urllib.request.Request(
+            WAKE_URL, data=b"{}", method="POST", headers={"Content-Type": "application/json"}
         )
+        urllib.request.urlopen(req, timeout=3).read()
         _log(f"notified {hit}")
     except Exception as e:
         _log(f"notify failed {e}")
 
 
 def _transcribe(pcm: bytes) -> str:
-    path = "/tmp/kiosk-wake-stt.wav"
+    path = os.path.join(TMPDIR, "wake-stt.wav")
     try:
-        open(path, "wb").write(_pcm_wav(pcm))
+        write_private(path, _pcm_wav(pcm))
     except OSError as e:
         _log(f"stt write {e}")
         return ""
@@ -154,29 +98,39 @@ def _transcribe(pcm: bytes) -> str:
         if not XAI_API_KEY:
             _log("stt skipped: no XAI_API_KEY")
             return ""
-        out = subprocess.check_output(
-            [
-                "curl",
-                "-sS",
-                "-m",
-                "20",
-                "-H",
-                f"Authorization: Bearer {XAI_API_KEY}",
-                "-F",
-                f"file=@{path};filename=wake.wav;type=audio/wav",
-                "-F",
-                f"model={STT_MODEL}",
-                "-F",
-                "language=en",
-                STT_URL,
-            ],
-            timeout=22,
+        wav = open(path, "rb").read()
+        boundary = "----kiosk" + uuid.uuid4().hex
+        parts = []
+        def add(name, value, filename=None, ctype=None):
+            parts.append(f"--{boundary}\r\n".encode())
+            disp = f'Content-Disposition: form-data; name="{name}"'
+            if filename:
+                disp += f'; filename="{filename}"'
+            parts.append((disp + "\r\n").encode())
+            if ctype:
+                parts.append(f"Content-Type: {ctype}\r\n".encode())
+            parts.append(b"\r\n")
+            parts.append(value if isinstance(value, bytes) else value.encode())
+            parts.append(b"\r\n")
+        add("file", wav, "wake.wav", "audio/wav")
+        add("model", STT_MODEL)
+        add("language", "en")
+        parts.append(f"--{boundary}--\r\n".encode())
+        body = b"".join(parts)
+        req = urllib.request.Request(
+            STT_URL,
+            data=body,
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {XAI_API_KEY}",
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+            },
         )
+        out = urllib.request.urlopen(req, timeout=22).read()
     except Exception as e:
         _log(f"stt failed {e}")
         return ""
     try:
-        import json
 
         payload = json.loads(out.decode())
         text = payload.get("text") or payload.get("transcript") or ""
@@ -223,7 +177,7 @@ class Gate:
             return
         rms = _rms(pcm)
         now = time.time()
-        if now - self.last_log >= 5:
+        if now - self.last_log >= 30:
             self.last_log = now
             paused = max(0, int(self.quiet_until - now))
             _log(
@@ -329,16 +283,7 @@ def main() -> None:
     last_hit = 0.0
     while True:
         proc = subprocess.Popen(
-            [
-                "/usr/bin/pw-record",
-                "--rate=48000",
-                "--channels=2",
-                "--format=s32",
-                "--latency=80ms",
-                "--target",
-                MIC,
-                "-",
-            ],
+            pw_record_argv("80ms"),
             env=_env(),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
@@ -358,12 +303,10 @@ def main() -> None:
                     while _busy():
                         time.sleep(0.15)
                     break
-                raw = proc.stdout.read(BYTES_100MS)
+                raw = proc.stdout.read(chunk_bytes() * 2)
                 if not raw:
                     break
-                s16 = audioop.lin2lin(raw, 4, 2)
-                mono = audioop.tomono(s16, 2, 0.5, 0.5)
-                pcm, rv_state = audioop.ratecv(mono, 2, 1, RATE_IN, RATE_OUT, rv_state)
+                pcm, rv_state = ingest(raw, rv_state)
                 if not pcm:
                     continue
                 if spotter is not None:
